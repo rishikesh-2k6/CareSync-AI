@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import ChatWidget from "./components/ChatWidget";
-import Dashboard from "./components/Dashboard";
 import { initialKB } from "./data/initialKB";
 import { 
   callLLM, retrieveContext, checkEscalation, detectLanguage, getLanguageInstruction 
@@ -226,40 +225,6 @@ export default function App() {
     playChime();
   };
 
-  // --- 4. Handoff Desk Receptionist Message Actions ---
-  const handleSendHumanMessage = (sessionId, text) => {
-    const sess = sessions.find(s => s.id === sessionId);
-    if (!sess) return;
-
-    const updatedHistory = [
-      ...sess.chatHistory,
-      { role: "assistant", content: text, sender: "human" }
-    ];
-
-    updateSession(sessionId, { chatHistory: updatedHistory });
-  };
-
-  // Handoff resolved - back to AI mode
-  const handleResolveSession = (sessionId) => {
-    const sess = sessions.find(s => s.id === sessionId);
-    if (!sess) return;
-
-    const updatedHistory = [
-      ...sess.chatHistory,
-      { 
-        role: "assistant", 
-        content: "✓ *Live chat session completed. MediGuide virtual clinical support has been re-activated for your safety.*", 
-        sender: "bot" 
-      }
-    ];
-
-    updateSession(sessionId, { 
-      isEscalated: false, 
-      isEmergency: false,
-      chatHistory: updatedHistory 
-    });
-  };
-
   // --- Helper: Update target session index inside local collection ---
   const updateSession = (sessionId, updates) => {
     setSessions(prev => prev.map(s => {
@@ -270,21 +235,6 @@ export default function App() {
     }));
   };
 
-  // --- 5. Knowledge Base Operations ---
-  const handleAddKB = (item) => {
-    setKnowledgeBase(prev => [item, ...prev]);
-  };
-
-  const handleDeleteKB = (id) => {
-    setKnowledgeBase(prev => prev.filter(item => item.id !== id));
-  };
-
-  // --- 6. Configuration updates ---
-  const handleUpdatePrompt = (newPrompt) => {
-    setSystemPrompt(newPrompt);
-    localStorage.setItem("caresync_prompt", newPrompt);
-  };
-
   const handleUpdateConfig = (newConfig) => {
     setSystemConfig(newConfig);
     localStorage.setItem("caresync_config", JSON.stringify(newConfig));
@@ -293,31 +243,24 @@ export default function App() {
   const widgetSession = sessions.find(s => s.id === "session-widget-patient") || null;
 
   return (
-    <div style={{ position: "relative", minHeight: "100vh", overflow: "hidden" }}>
+    <div style={{ 
+      display: "flex", 
+      justifyContent: "center", 
+      alignItems: "center", 
+      minHeight: "100vh", 
+      background: "radial-gradient(circle at top, #2e1065 0%, #09090b 100%)", // Glowing clinic purple background
+      overflow: "hidden",
+      padding: "20px"
+    }}>
       
-      {/* Clinic Administration Panel Fullscreen */}
-      <Dashboard 
-        sessions={sessions}
-        activeSessionId={activeSessionId}
-        onSelectSession={setActiveSessionId}
-        onSendHumanMessage={handleSendHumanMessage}
-        onResolveSession={handleResolveSession}
-        knowledgeBase={knowledgeBase}
-        onAddKB={handleAddKB}
-        onDeleteKB={handleDeleteKB}
-        systemPrompt={systemPrompt}
-        onUpdatePrompt={handleUpdatePrompt}
-        systemConfig={systemConfig}
-        onUpdateConfig={handleUpdateConfig}
-      />
-
-      {/* Floating Interactive CareSync Chatbot Overlay */}
+      {/* Interactive CareSync Mobile Phone Replica Chatbot Centered */}
       <ChatWidget 
         session={widgetSession}
         onSendMessage={handleWidgetMessage}
         onEscalate={handleEscalateSession}
         systemPrompt={systemPrompt}
         systemConfig={systemConfig}
+        onUpdateConfig={handleUpdateConfig}
       />
 
     </div>
