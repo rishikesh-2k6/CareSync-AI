@@ -1,8 +1,8 @@
-# CareSync AI — MediGuide Patient FAQ Center & Dashboard
+# CareSync AI — Integrated Clinic System & Chatbot Dashboard
 
-Welcome to **CareSync AI**, a premium, safety-first clinical FAQ chatbot widget and operational developer dashboard designed to optimize healthcare patient communication, pre-visit preparations, and staff coordination.
+**CareSync AI** is a smart healthcare ecosystem bridging doctors and patients. Doctors input prescriptions, triggering automated AI voice calls, SMS, and emails to remind patients to take pills. Patients access a clean dashboard with a guarded AI chatbot to clarify prescriptions, easily book appointments, and pay securely online.
 
-At the core of this system is **MediGuide**, an AI clinical assistant built from our interactive clinic blueprint. It operates side-by-side with an administrative console to provide a high-fidelity playground demonstrating clinical AI safety, local Vector RAG matching, and live receptionist handoffs.
+This repository hosts the **CareSync Patient Chatbot Widget & Clinic Control Center** — featuring **MediGuide**, our safety-first, multi-lingual clinical FAQ chatbot.
 
 ---
 
