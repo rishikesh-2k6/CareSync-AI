@@ -119,19 +119,35 @@ export default function App() {
   };
 
   // --- 3. Chat Widget Message Router (RAG Lookup & Safety Checks) ---
-  const handleWidgetMessage = async (userText) => {
+  const handleWidgetMessage = async (userText, image = null, forceEscalate = false) => {
     const widgetSessionId = "session-widget-patient";
     const activeSess = sessions.find(s => s.id === widgetSessionId);
     if (!activeSess) return "Error initializing session";
 
-    // 3.1: If chat has been taken over by clinician (human)
-    if (activeSess.isEscalated) {
-      // Wait for human input from dashboard. Return typing loader mock.
-      // In a real database/websocket setup, this acts via active listeners.
-      // Here, we log the user input so it shows in the Handoff Console.
+    // 3.0: Direct Agent Takeover via interactive Action Chips
+    if (forceEscalate) {
       const updatedHistory = [
         ...activeSess.chatHistory,
-        { role: "user", content: userText }
+        { role: "user", content: userText, sender: "patient" },
+        { 
+          role: "assistant", 
+          content: "👨‍⚕️ *Confidence check: I've flagged this chat for a live clinic specialist to assist you immediately. You are now placed in our active receptionist queue.*", 
+          sender: "bot" 
+        }
+      ];
+      updateSession(widgetSessionId, { 
+        isEscalated: true,
+        chatHistory: updatedHistory 
+      });
+      playChime();
+      return;
+    }
+
+    // 3.1: If chat has been taken over by clinician (human)
+    if (activeSess.isEscalated) {
+      const updatedHistory = [
+        ...activeSess.chatHistory,
+        { role: "user", content: userText, sender: "patient", image: image }
       ];
       updateSession(widgetSessionId, { chatHistory: updatedHistory });
       playChime(); // Alert clinician that patient replied
@@ -161,7 +177,8 @@ export default function App() {
       userMessage: userText,
       context: contextString,
       history: historyClean,
-      config: systemConfig
+      config: systemConfig,
+      image // Pass base64 image directly
     });
 
     // Determine Handoff Escalation Need
@@ -171,7 +188,7 @@ export default function App() {
     // Save logs & update active session history
     const updatedHistory = [
       ...activeSess.chatHistory,
-      { role: "user", content: userText },
+      { role: "user", content: userText, sender: "patient", image: image },
       { role: "assistant", content: botText, sender: "bot" }
     ];
 

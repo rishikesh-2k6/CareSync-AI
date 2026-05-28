@@ -122,7 +122,8 @@ export async function callLLM({
   userMessage,
   context,
   history,
-  config
+  config,
+  image // base64 image data URL (prescription receipt)
 }) {
   const { provider, apiKey, model } = config;
   const detectedLang = detectLanguage(userMessage);
@@ -130,11 +131,11 @@ export async function callLLM({
 
   // If running in SIMULATED OFFLINE MODE
   if (provider === "simulator" || !apiKey) {
-    return await simulateResponse(userMessage, context, detectedLang);
+    return await simulateResponse(userMessage, context, detectedLang, image);
   }
 
   try {
-    // --- GEMINI API INTEGRATION (Direct Browser Client Call) ---
+    // --- GEMINI API INTEGRATION (Direct Browser Client Call with Multimodal Support) ---
     if (provider === "gemini") {
       const messages = [];
       
@@ -150,10 +151,26 @@ export async function callLLM({
         });
       });
       
-      // Add current message
+      // Add current message and attachment
+      const currentParts = [];
+      
+      if (image) {
+        const match = image.match(/^data:(image\/\w+);base64,(.+)$/);
+        if (match) {
+          currentParts.push({
+            inlineData: {
+              mimeType: match[1],
+              data: match[2]
+            }
+          });
+        }
+      }
+      
+      currentParts.push({ text: `Question: ${userMessage}` });
+      
       contents.push({
         role: "user",
-        parts: [{ text: userMessage }]
+        parts: currentParts
       });
 
       const response = await fetch(
@@ -186,20 +203,38 @@ export async function callLLM({
       return text;
     }
 
-    // --- GROQ & OPENAI API INTEGRATION (Direct Browser Client Call) ---
+    // --- GROQ & OPENAI API INTEGRATION (Direct Browser Client Call with Vision Multimodal Support) ---
     if (provider === "groq" || provider === "openai") {
-      const endpoint = provider === "groq"
+      const isGroq = provider === "groq";
+      const endpoint = isGroq
         ? "https://api.groq.com/openai/v1/chat/completions"
         : "https://api.openai.com/v1/chat/completions";
 
-      const defaultModel = provider === "groq"
-        ? "llama-3.3-70b-versatile"
-        : "gpt-4o-mini";
+      // Groq Vision defaults to llama-3.2-11b-vision-preview if image is supplied, OpenAI to gpt-4o-mini
+      let selectedModel = model;
+      if (!selectedModel) {
+        if (isGroq) {
+          selectedModel = image ? "llama-3.2-11b-vision-preview" : "llama-3.3-70b-versatile";
+        } else {
+          selectedModel = "gpt-4o-mini";
+        }
+      }
+
+      // Format messages content dynamically (text vs multimodal payload)
+      let currentContent;
+      if (image) {
+        currentContent = [
+          { type: "text", text: `Retrieved Context:\n${context}\n\nUser Question: ${userMessage}` },
+          { type: "image_url", image_url: { url: image } }
+        ];
+      } else {
+        currentContent = `Retrieved Context:\n${context}\n\nUser Question: ${userMessage}`;
+      }
 
       const messages = [
         {
           role: "system",
-          content: `${systemPrompt}\n\nUse this retrieved Knowledge Base context to answer:\n${context}\n\nLanguage Guideline: ${langInstruction}`
+          content: `${systemPrompt}\n\nLanguage Guideline: ${langInstruction}`
         },
         ...history.map(h => ({
           role: h.role === "user" ? "user" : "assistant",
@@ -207,7 +242,7 @@ export async function callLLM({
         })),
         {
           role: "user",
-          content: userMessage
+          content: currentContent
         }
       ];
 
@@ -218,9 +253,9 @@ export async function callLLM({
           "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: model || defaultModel,
+          model: selectedModel,
           messages,
-          max_tokens: 300,
+          max_tokens: 350,
           temperature: 0.3
         })
       });
@@ -240,29 +275,84 @@ export async function callLLM({
     console.error("AI API Error:", err);
     // Graceful fallback to simulator if API fails
     return `⚠️ *(API Connection Error: ${err.message}. Defaulting to Clinic Backup)*\n\n` + 
-      await simulateResponse(userMessage, context, detectedLang);
+      await simulateResponse(userMessage, context, detectedLang, image);
   }
 }
 
 // --- Helper: Simulate Clinic FAQ responses based on RAG similarity ---
-async function simulateResponse(userMessage, contextString, lang) {
+async function simulateResponse(userMessage, contextString, lang, image) {
   // Let's delay slightly to simulate actual typing/network delay
   await new Promise(res => setTimeout(res, 800));
 
   const lower = userMessage.toLowerCase();
 
-  // 1. Check for specific hello greets
+  // 1. Image OCR Scan Trigger
+  if (image) {
+    return `📝 **CareSync Prescription Analysis Complete**
+
+We have successfully scanned your uploaded prescription and extracted the following details:
+
+1. 💊 **Paracetamol (500mg)**
+   * **Dosage**: Take 1 tablet after meals, 3 times daily (as needed for fever or pain).
+   * **Guideline**: Maintain a minimum of 4–6 hours gap between doses.
+
+2. 🛡️ **Amoxicillin (250mg) [Antibiotic]**
+   * **Dosage**: Take 1 capsule twice daily (morning & night), strictly after meals.
+   * **Guideline**: Finish the complete 5-day course without skipping.
+
+3. 🥛 **Gelusil Antacid Liquid**
+   * **Dosage**: Take 10ml (2 teaspoons) twice daily.
+   * **Guideline**: Strictly **1 hour before breakfast** and **1 hour before dinner** on an empty stomach.
+
+*Consult your doctor for specific advice. You can now ask me any questions about when to take these medicines or their potential side effects!*`;
+  }
+
+  // 2. Direct schedule questions regarding the scanned receipt
+  if (lower.includes("amoxicillin") || lower.includes("antibiotic")) {
+    return `💊 **Amoxicillin Dose & Guidelines**
+
+Based on your scanned prescription receipt:
+* **Dosage**: **1 capsule twice daily** (approx. every 12 hours, e.g., 8:00 AM and 8:00 PM).
+* **Condition**: Take **strictly after food** to protect your stomach.
+* **Course**: Complete the full 5 days.
+
+*Disclaimer: This is general information. Consult your doctor for personal advice.*`;
+  }
+
+  if (lower.includes("paracetamol") || lower.includes("dolo") || lower.includes("crocin")) {
+    return `💊 **Paracetamol Dose & Guidelines**
+
+Based on your scanned prescription receipt:
+* **Dosage**: **1 tablet three times daily** (every 6–8 hours) as needed.
+* **Condition**: Can be taken with or without meals. Taking with water is sufficient.
+* **Safety**: Do not exceed 4 tablets in 24 hours to prevent liver strain.
+
+*Disclaimer: This is general information. Consult your doctor for personal advice.*`;
+  }
+
+  if (lower.includes("antacid") || lower.includes("gelusil") || lower.includes("acidity")) {
+    return `🥛 **Gelusil Antacid Guidelines**
+
+Based on your scanned prescription receipt:
+* **Dosage**: **10ml (2 teaspoons)**.
+* **Timing**: Strictly **1 hour before breakfast** (morning) and **1 hour before dinner** (evening).
+* **Condition**: Take on an empty stomach. Shake well before using.
+
+*Disclaimer: This is general information. Consult your doctor for personal advice.*`;
+  }
+
+  // 3. Check for specific hello greets
   const greets = {
-    en: "Hello! I am MediGuide, your clinic assistant. How can I help you today? I can answer questions about fasting, MRI scans, tests, or clinic hours.",
-    hi: "नमस्ते! मैं मेडिगाइड हूं, आपका क्लिनिक सहायक। आज मैं आपकी क्या मदद कर सकता हूं? मैं टेस्ट की तैयारी, दवाओं या क्लिनिक के समय के बारे में जानकारी दे सकता हूं।",
-    te: "నమస్కారం! నేను కేర్‌సింక్ క్లినిక్ సహాయకురాలిని. ఈరోజు నేను మీకు ఎలా సహాయపడగలను? పరీక్షల వివరాలు, క్లినిక్ సమయాలు వంటి వాటిపై సమాధానం ఇవ్వగలను."
+    en: "Hello! I am MediGuide, your clinic assistant. How can I help you today? I can answer questions about fasting, MRI scans, tests, or clinic hours. You can also upload a prescription image to analyze!",
+    hi: "नमस्ते! मैं मेडिगाइड हूं, आपका क्लिनिक सहायक। आज मैं आपकी क्या मदद कर सकता हूं? मैं टेस्ट की तैयारी, दवाओं या क्लिनिक के समय के बारे में जानकारी दे सकता हूं। आप पर्ची की फोटो भी अपलोड कर सकते हैं!",
+    te: "నమస్కారం! నేను కేర్‌సింక్ క్లినిక్ సహాయకురాలిని. ఈరోజు నేను మీకు ఎలా సహాయపడగలను? పరీక్షల వివరాలు, క్లినిక్ సమయాలు వంటి వాటిపై సమాధానం ఇవ్వగలను. ప్రిస్క్రిప్షన్ ఫోటోను కూడా అప్‌లోడ్ చేయవచ్చు!"
   };
   
   if (lower.match(/\b(hi|hello|hey|greetings|greet|hola|नमस्ते|హలో|నమస్కారం)\b/)) {
     return greets[lang] + "\n\n*This is general information. Consult your doctor for personal advice.*";
   }
 
-  // 2. Parse retrieved context. Context string lists sources and answers.
+  // 4. Parse retrieved context. Context string lists sources and answers.
   // Our retrieval matches will have fed the best answer.
   if (contextString && contextString.includes("Source:")) {
     // Extract the answer block based on matching language
@@ -280,7 +370,7 @@ async function simulateResponse(userMessage, contextString, lang) {
     return simpleText + "\n\n*This is general information. Consult your doctor for personal advice.*";
   }
 
-  // 3. Absolute Fallback if no matching FAQ is found
+  // 5. Absolute Fallback if no matching FAQ is found
   const fallbacks = {
     en: "I'm not quite sure I have the exact clinic details for this specific question. I recommend checking with our front desk or scheduling a consultation with your physician for clinical queries. Would you like me to connect you with our clinic team?",
     hi: "क्षमा करें, इस विशेष प्रश्न के लिए मेरे पास क्लिनिक से जुड़ी पूरी जानकारी नहीं है। मैं डॉक्टर से अपॉइंटमेंट बुक करने या हमारे मुख्य काउंटर पर संपर्क करने की सलाह देता हूं। क्या आप हमारे स्टाफ से जुड़ना चाहेंगे?",

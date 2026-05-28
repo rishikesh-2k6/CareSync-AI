@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { 
-  MessageSquare, Send, Volume2, VolumeX, Mic, MicOff, 
-  Languages, AlertTriangle, ShieldAlert, Phone, RefreshCw, UserCheck 
+  Send, Volume2, VolumeX, Mic, MicOff, Paperclip, 
+  ChevronLeft, ArrowLeft, CheckCheck, X, Image as ImageIcon 
 } from "lucide-react";
 import { 
-  detectEmergency, getEmergencyResponse, checkEscalation 
+  detectEmergency, getEmergencyResponse 
 } from "../services/chatbotService";
 
 export default function ChatWidget({ 
@@ -14,36 +14,39 @@ export default function ChatWidget({
   systemPrompt,
   systemConfig 
 }) {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(true); // Open by default for immediate testing
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "🏥 **Welcome to CareSync Clinic Support!**\n\nI am **MediGuide**, your virtual health receptionist. I can assist you with test preparations, clinical timings, insurance needs, or general symptom guides.\n\n*How can I help you today?*"
+      content: "Hi Jennie! I am your clinic support bot. You can ask me any clinic questions, or **attach a medical receipt** to analyze your medicine schedules!",
+      sender: "bot"
     }
   ]);
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [ttsEnabled, setTtsEnabled] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const [activeLang, setActiveLang] = useState("en");
-  const [emergencyAlert, setEmergencyAlert] = useState(null);
+  const [selectedImage, setSelectedImage] = useState(null); // base64 representation
+  const [imagePreview, setImagePreview] = useState(null);   // preview url
 
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // Auto-scroll messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
 
-  // Sync parent session state changes (e.g. human takeover messages)
+  // Sync session state changes from App.jsx (like human receptionist messages)
   useEffect(() => {
     if (session && session.chatHistory.length > 0) {
-      // Re-map history
       const formatted = session.chatHistory.map(h => ({
         role: h.role,
         content: h.content,
-        sender: h.sender // 'bot' or 'human'
+        sender: h.sender,
+        image: h.image,
+        isAlert: h.isAlert
       }));
       setMessages(formatted);
     }
@@ -56,6 +59,7 @@ export default function ChatWidget({
       const rec = new SpeechRecognition();
       rec.continuous = false;
       rec.interimResults = false;
+      rec.lang = "en-US";
       
       rec.onstart = () => setIsListening(true);
       rec.onend = () => setIsListening(false);
@@ -70,29 +74,13 @@ export default function ChatWidget({
     }
   }, []);
 
-  // Handle Speech Recognition Language updates
-  useEffect(() => {
-    if (recognitionRef.current) {
-      const langMap = { en: "en-US", hi: "hi-IN", te: "te-IN" };
-      recognitionRef.current.lang = langMap[activeLang] || "en-US";
-    }
-  }, [activeLang]);
-
   // Read response aloud using Text-to-Speech
   const speakText = (text) => {
     if (!ttsEnabled) return;
-    
-    // Stop any active speak
     window.speechSynthesis.cancel();
-    
-    // Clean markdown before speaking
     const cleanText = text.replace(/[*#_⚠️]/g, "").replace(/\[.*?\]/g, "");
     const utterance = new SpeechSynthesisUtterance(cleanText);
-    
-    // Select correct voice accent if available
-    const langMap = { en: "en-US", hi: "hi-IN", te: "te-IN" };
-    utterance.lang = langMap[activeLang] || "en-US";
-    
+    utterance.lang = "en-US";
     window.speechSynthesis.speak(utterance);
   };
 
@@ -109,205 +97,238 @@ export default function ChatWidget({
     }
   };
 
-  const handleSend = async (textToSend) => {
+  // Handle Prescription Image Selection
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setSelectedImage(reader.result);
+      setImagePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Remove selected image preview
+  const handleRemoveImage = () => {
+    setSelectedImage(null);
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
+  const handleSend = async (textToSend, attachImage = selectedImage) => {
     const text = textToSend || inputValue;
-    if (!text.trim()) return;
+    if (!text.trim() && !attachImage) return;
 
     // Check emergency first
-    if (detectEmergency(text)) {
-      setEmergencyAlert(true);
-      speakText("Warning: Chest pain or severe symptoms detected. Please call 108 immediately or go to the nearest emergency room.");
-      
+    if (text && detectEmergency(text)) {
+      speakText("Warning: Urgent symptoms detected. Please call 108 immediately or go to the nearest emergency room.");
       const alertMsg = getEmergencyResponse();
-      const updatedMessages = [
-        ...messages,
-        { role: "user", content: text },
-        { role: "assistant", content: alertMsg.response, sender: "bot", isAlert: true }
-      ];
-      setMessages(updatedMessages);
-      setInputValue("");
-      
-      // Notify parent about emergency escalation
       onEscalate(text, alertMsg.response, true);
+      setInputValue("");
+      handleRemoveImage();
       return;
     }
 
-    // Add user message
-    const userTurn = { role: "user", content: text };
-    const updatedWithUser = [...messages, userTurn];
-    setMessages(updatedWithUser);
-    setInputValue("");
+    // Add user message to history in App controller
+    const userTurn = { 
+      role: "user", 
+      content: text || "Uploaded prescription receipt for schedule scanning.",
+      sender: "patient",
+      image: attachImage // Base64 stored here!
+    };
+
     setIsTyping(true);
+    setInputValue("");
+    handleRemoveImage();
 
     // Call chatbot engine via App controller
     try {
-      const responseText = await onSendMessage(text);
-      
+      await onSendMessage(text || "Scanned receipt.", attachImage);
       setIsTyping(false);
-      const botTurn = { 
-        role: "assistant", 
-        content: responseText, 
-        sender: session?.isEscalated ? "human" : "bot" 
-      };
-      
-      setMessages(prev => [...prev, botTurn]);
-      speakText(responseText);
     } catch (e) {
       setIsTyping(false);
-      setMessages(prev => [...prev, { 
-        role: "assistant", 
-        content: "⚠️ Sorry, there was an issue communicating with our clinic assistant. Please try again." 
-      }]);
+      alert("Error sending message: " + e.message);
     }
   };
 
-  const quickPrompts = [
-    { label: "Do I need to fast?", text: "Can I eat before my blood test?" },
-    { label: "Prepare for MRI scan", text: "How do I prepare for an MRI scan?" },
-    { label: "Clinic operating hours", text: "What are the clinic's operating hours?" },
-    { label: "Paracetamol dosage", text: "What is the correct dosage for Paracetamol?" }
-  ];
+  // Click handler for action chips
+  const handleChipClick = (action) => {
+    if (action === "escalate") {
+      onSendMessage("I need to chat with an agent.", null, true); // True forces immediate receptionist handoff
+    } else if (action === "helpful") {
+      setMessages(prev => [
+        ...prev,
+        { role: "user", content: "Yes, it was helpful.", sender: "patient" },
+        { role: "assistant", content: "Thank you for your feedback! Please let me know if you need anything else.", sender: "bot" }
+      ]);
+    }
+  };
+
+  const getTimeString = () => {
+    const d = new Date();
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
 
   return (
-    <div style={{ position: "fixed", bottom: "24px", right: "24px", zIndex: 999 }}>
+    <div style={{ position: "fixed", bottom: "20px", right: "20px", zIndex: 999 }}>
       
       {/* 1. Closed Chat Floating Circle */}
       {!isOpen && (
         <button 
           onClick={() => setIsOpen(true)}
-          className="glow-active"
           style={{
             width: "60px",
             height: "60px",
             borderRadius: "50%",
-            background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+            background: "linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)", // Purple gradient
             border: "none",
             color: "#fff",
             cursor: "pointer",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            boxShadow: "0 8px 24px rgba(16, 185, 129, 0.4)",
-            transition: "transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275)",
+            boxShadow: "0 8px 24px rgba(124, 58, 237, 0.4)",
+            transition: "transform 0.2s"
           }}
           onMouseEnter={(e) => e.currentTarget.style.transform = "scale(1.08)"}
           onMouseLeave={(e) => e.currentTarget.style.transform = "scale(1)"}
-          id="btn-chatbot-toggle"
         >
-          <MessageSquare size={26} />
+          <span style={{ fontSize: "24px" }}>💬</span>
         </button>
       )}
 
-      {/* 2. Open Chat Interface (Slide-up Glassmorphism Panel) */}
+      {/* 2. Open Chat Mobile Bezel Replica Frame */}
       {isOpen && (
-        <div 
-          className="glass animate-fade-in"
-          style={{
-            width: "400px",
-            height: "600px",
-            borderRadius: "var(--radius-lg)",
-            display: "flex",
-            flexDirection: "column",
-            overflow: "hidden",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-            boxShadow: "0 12px 40px rgba(0, 0, 0, 0.6)",
-          }}
-        >
+        <div style={{
+          width: "375px",
+          height: "680px",
+          backgroundColor: "#000", // Outer phone frame black
+          borderRadius: "44px",
+          padding: "10px", // Bezel width
+          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.5)",
+          display: "flex",
+          flexDirection: "column",
+          position: "relative",
+          border: "2px solid #222"
+        }}>
           
-          {/* Header Panel */}
+          {/* Speaker mesh & Camera Notch Bezel Mockup */}
           <div style={{
-            padding: "16px 20px",
-            background: "linear-gradient(90deg, #131924 0%, #0d121c 100%)",
-            borderBottom: "1px solid var(--border-color)",
+            position: "absolute",
+            top: "10px",
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: "140px",
+            height: "26px",
+            backgroundColor: "#000",
+            borderBottomLeftRadius: "16px",
+            borderBottomRightRadius: "16px",
+            zIndex: 1000,
             display: "flex",
             alignItems: "center",
-            justifyContent: "space-between"
+            justifyContent: "center"
           }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-              <div style={{ position: "relative" }}>
-                <div style={{
-                  width: "36px",
-                  height: "36px",
-                  borderRadius: "50%",
-                  background: session?.isEscalated 
-                    ? "linear-gradient(135deg, #3b82f6, #1d4ed8)" // Blue for human
-                    : "linear-gradient(135deg, #10b981, #059669)", // Green for bot
+            {/* Small camera dot */}
+            <div style={{
+              width: "8px",
+              height: "8px",
+              borderRadius: "50%",
+              backgroundColor: "#111",
+              border: "1px solid #222",
+              marginRight: "10px"
+            }} />
+            {/* Speaker lines */}
+            <div style={{
+              width: "40px",
+              height: "3px",
+              borderRadius: "2px",
+              backgroundColor: "#333"
+            }} />
+          </div>
+
+          {/* Inner Phone Screen Container (Pure white based on Mockup) */}
+          <div style={{
+            flex: 1,
+            backgroundColor: "#fff", // White mockup theme
+            borderRadius: "36px",
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            border: "1px solid #eee"
+          }}>
+            
+            {/* Mobile Status Header Padding */}
+            <div style={{ height: "26px", backgroundColor: "#fff" }} />
+
+            {/* Custom Header Bar */}
+            <div style={{
+              padding: "12px 16px",
+              borderBottom: "1px solid #f3f4f6",
+              backgroundColor: "#fff",
+              display: "flex",
+              alignItems: "center",
+              gap: "12px"
+            }}>
+              {/* Back Arrow */}
+              <button 
+                onClick={() => setIsOpen(false)}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#111",
+                  cursor: "pointer",
+                  padding: "4px",
                   display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: "18px"
-                }}>
-                  {session?.isEscalated ? "👨‍⚕️" : "🏥"}
-                </div>
-                <div className="glow-active" style={{
-                  position: "absolute",
-                  bottom: "-2px",
-                  right: "-2px",
-                  width: "12px",
-                  height: "12px",
-                  borderRadius: "50%",
-                  backgroundColor: "#10b981",
-                  border: "2px solid #0d121c"
-                }} />
+                  alignItems: "center"
+                }}
+              >
+                <ArrowLeft size={20} />
+              </button>
+
+              {/* Bot Icon Wrapper */}
+              <div style={{
+                width: "36px",
+                height: "36px",
+                borderRadius: "50%",
+                backgroundColor: "#7c3aed", // Purple bot
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                fontSize: "18px"
+              }}>
+                {session?.isEscalated ? "👨‍⚕️" : "🤖"}
               </div>
-              
+
+              {/* Chat Title */}
               <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "#fff", display: "flex", alignItems: "center", gap: "6px" }}>
-                  {session?.isEscalated ? "Clinic Desk (Human)" : "MediGuide Assistant"}
-                  {session?.isEscalated && (
-                    <span style={{
-                      backgroundColor: "rgba(59, 130, 246, 0.15)",
-                      color: "#3b82f6",
-                      fontSize: "9px",
-                      padding: "1px 5px",
-                      borderRadius: "10px",
-                      fontWeight: 700
-                    }}>TAKEN OVER</span>
-                  )}
-                </div>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>
-                  {session?.isEscalated ? "Live Receptionist Chat" : "Safety-First FAQ Bot"}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Actions (Audio / Close) */}
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              
-              {/* Language Indicator */}
-              <div style={{ display: "flex", gap: "4px", backgroundColor: "rgba(255,255,255,0.04)", padding: "3px", borderRadius: "14px" }}>
-                {["en", "hi", "te"].map(l => (
-                  <button
-                    key={l}
-                    onClick={() => setActiveLang(l)}
-                    style={{
-                      fontSize: "10px",
-                      fontWeight: 700,
-                      padding: "2px 6px",
-                      border: "none",
-                      borderRadius: "10px",
-                      cursor: "pointer",
-                      textTransform: "uppercase",
-                      background: activeLang === l ? "var(--primary)" : "transparent",
-                      color: activeLang === l ? "#fff" : "var(--text-muted)",
-                      transition: "var(--transition)"
-                    }}
-                  >
-                    {l}
-                  </button>
-                ))}
+                <h3 style={{
+                  fontSize: "14.5px",
+                  fontWeight: 700,
+                  color: "#111827",
+                  margin: 0,
+                  lineHeight: 1.2
+                }}>
+                  {session?.isEscalated ? "Staff Specialist" : "Customer Care Bot"}
+                </h3>
+                <span style={{ fontSize: "11px", color: "#6b7280" }}>
+                  {session?.isEscalated ? "Tommy is typing..." : "Online · Active"}
+                </span>
               </div>
 
-              {/* Speaker Toggle */}
+              {/* Speaker Toggle Button */}
               <button 
                 onClick={() => setTtsEnabled(!ttsEnabled)}
                 style={{
+                  marginLeft: "auto",
                   width: "28px",
                   height: "28px",
                   borderRadius: "50%",
                   border: "none",
-                  background: ttsEnabled ? "rgba(16, 185, 129, 0.15)" : "transparent",
-                  color: ttsEnabled ? "var(--primary)" : "var(--text-muted)",
+                  background: ttsEnabled ? "#f3e8ff" : "transparent",
+                  color: ttsEnabled ? "#7c3aed" : "#9ca3af",
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
@@ -316,301 +337,405 @@ export default function ChatWidget({
               >
                 {ttsEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
               </button>
-
-              {/* Close Button */}
-              <button 
-                onClick={() => setIsOpen(false)}
-                style={{
-                  border: "none",
-                  background: "transparent",
-                  color: "var(--text-muted)",
-                  cursor: "pointer",
-                  fontSize: "20px",
-                  padding: "0 4px"
-                }}
-              >
-                ✕
-              </button>
             </div>
-          </div>
 
-          {/* Emergency Active Warning Header */}
-          {emergencyAlert && (
-            <div 
-              className="emergency-pulse"
-              style={{
-                background: "rgba(239, 68, 68, 0.08)",
-                borderBottom: "1px solid rgba(239, 68, 68, 0.3)",
-                padding: "8px 12px",
+            {/* Chat Messages Feed Body */}
+            <div style={{
+              flex: 1,
+              overflowY: "auto",
+              padding: "20px 16px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "16px",
+              background: "#fafafa" // Soft mockup feed bg
+            }}>
+              
+              {messages.map((msg, i) => {
+                const isUser = msg.role === "user";
+                const isHandoffAlert = msg.content.includes("Confidence check") || msg.content.includes("Live chat session completed");
+
+                // Centered system messages (like handoff notifications)
+                if (isHandoffAlert) {
+                  return (
+                    <div 
+                      key={i}
+                      style={{
+                        alignSelf: "center",
+                        fontSize: "11.5px",
+                        color: "#6b7280",
+                        background: "#f3f4f6",
+                        padding: "6px 14px",
+                        borderRadius: "16px",
+                        textAlign: "center",
+                        margin: "4px 0",
+                        width: "85%",
+                        border: "1px solid #e5e7eb"
+                      }}
+                    >
+                      Agent Tommy joined the conversation. {getTimeString()}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div 
+                    key={i}
+                    style={{
+                      display: "flex",
+                      flexDirection: "row",
+                      gap: "10px",
+                      alignSelf: isUser ? "flex-end" : "flex-start",
+                      maxWidth: "92%",
+                      alignItems: "flex-start"
+                    }}
+                  >
+                    
+                    {/* A. Left Avatar: Show for bot or human receptionist */}
+                    {!isUser && (
+                      <img 
+                        src={msg.sender === "human" ? "/avatars/receptionist.png" : "data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2250%22 fill=%22%237c3aed%22/><text y=%22.7em%22 x=%2250%25%22 text-anchor=%22middle%22 font-size=%2255%22 fill=%22white%22>🤖</text></svg>"} 
+                        alt="avatar" 
+                        style={{
+                          width: "32px",
+                          height: "32px",
+                          borderRadius: "50%",
+                          objectFit: "cover",
+                          marginTop: "16px", // aligned below name baseline
+                          border: "1px solid #e5e7eb"
+                        }}
+                      />
+                    )}
+
+                    {/* B. Message Bubble Column */}
+                    <div style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: isUser ? "flex-end" : "flex-start"
+                    }}>
+                      
+                      {/* User's Name displayed strictly above bubble (based on mockup image) */}
+                      {isUser && (
+                        <span style={{
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          color: "#4b5563",
+                          marginBottom: "4px",
+                          paddingRight: "6px"
+                        }}>
+                          Jennie Doe
+                        </span>
+                      )}
+
+                      {/* Actual Speech Bubble */}
+                      <div style={{
+                        padding: "10px 14px",
+                        borderRadius: "16px",
+                        fontSize: "12.5px",
+                        lineHeight: 1.5,
+                        color: "#1f2937",
+                        wordBreak: "break-word",
+                        whiteSpace: "pre-wrap",
+                        background: msg.isAlert 
+                          ? "#fef2f2" // danger alert red tint
+                          : "#f3f4f6", // Jennie Doe mockup light grey background for both!
+                        border: msg.isAlert 
+                          ? "1px solid #fca5a5" 
+                          : "1px solid #e5e7eb"
+                      }}>
+                        
+                        {/* Render uploaded image attachment if present */}
+                        {msg.image && (
+                          <div style={{ marginBottom: "8px" }}>
+                            <img 
+                              src={msg.image} 
+                              alt="receipt attachment" 
+                              style={{
+                                width: "100%",
+                                maxHeight: "150px",
+                                borderRadius: "8px",
+                                objectFit: "cover",
+                                border: "1px solid #ddd"
+                              }}
+                            />
+                            <div style={{ fontSize: "9px", color: "#6b7280", marginTop: "4px", display: "flex", alignItems: "center", gap: "4px" }}>
+                              <ImageIcon size={10} /> Scanned Prescription Receipt
+                            </div>
+                          </div>
+                        )}
+                        
+                        {msg.content}
+                      </div>
+
+                      {/* Timestamp & Double Check status underneath */}
+                      <div style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "4px",
+                        marginTop: "4px",
+                        fontSize: "9.5px",
+                        color: "#9ca3af",
+                        padding: "0 6px"
+                      }}>
+                        {isUser && <CheckCheck size={11} color="#10b981" />}
+                        <span>{getTimeString()}</span>
+                      </div>
+
+                    </div>
+
+                    {/* C. Right Avatar: Display only for user (Jennie Doe) */}
+                    {isUser && (
+                      <img 
+                        src="/avatars/jennie_doe.png" 
+                        alt="patient avatar" 
+                        style={{
+                          width: "32px",
+                          height: "32px",
+                          borderRadius: "50%",
+                          objectFit: "cover",
+                          marginTop: "16px", // aligned below name baseline
+                          border: "1px solid #e5e7eb"
+                        }}
+                      />
+                    )}
+
+                  </div>
+                );
+              })}
+
+              {/* Bot typing dot indicator */}
+              {isTyping && (
+                <div style={{ display: "flex", gap: "8px", padding: "10px 14px", background: "#f3f4f6", border: "1px solid #e5e7eb", borderRadius: "16px", width: "50px", alignSelf: "flex-start", marginLeft: "42px" }}>
+                  {[1, 2, 3].map(dot => (
+                    <div key={dot} style={{
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      backgroundColor: "#7c3aed",
+                      animation: "blink 1.2s infinite both",
+                      animationDelay: `${dot * 0.15}s`
+                    }} />
+                  ))}
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+
+            {/* Mockup Interactive Purple Action Chips Panel */}
+            {messages.length < 5 && (
+              <div style={{
+                padding: "8px 16px",
+                background: "#fafafa",
                 display: "flex",
-                alignItems: "center",
+                flexDirection: "column",
                 gap: "8px",
-                color: "#ff6b6b",
-                fontSize: "12px",
-                fontWeight: 500
-              }}
-            >
-              <ShieldAlert size={14} />
-              <span>Severe Emergency Keywords Detected. Call 108 immediately.</span>
-              <button 
-                onClick={() => setEmergencyAlert(false)}
-                style={{
-                  marginLeft: "auto",
-                  border: "none",
-                  background: "transparent",
-                  color: "#ff6b6b",
-                  cursor: "pointer",
-                  fontSize: "11px",
-                  textDecoration: "underline"
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          )}
+                alignItems: "center",
+                borderTop: "1px solid #f3f4f6"
+              }}>
+                {/* Outline Chip: helpful */}
+                <button
+                  onClick={() => handleChipClick("helpful")}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "20px",
+                    border: "1.5px solid #7c3aed",
+                    background: "transparent",
+                    color: "#7c3aed",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#faf5ff"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                >
+                  Yes, it was helpful.
+                </button>
 
-          {/* Messages Container */}
-          <div style={{
-            flex: 1,
-            overflowY: "auto",
-            padding: "16px 20px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "14px",
-            background: "#0c0e14"
-          }}>
-            {messages.map((msg, i) => (
-              <div 
-                key={i} 
-                className="animate-slide-in"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: msg.role === "user" ? "flex-end" : "flex-start",
-                }}
-              >
-                
-                {/* Message Bubble */}
-                <div style={{
-                  maxWidth: "85%",
-                  padding: "10px 14px",
-                  borderRadius: "14px",
-                  fontSize: "13px",
-                  lineHeight: "1.5",
-                  wordBreak: "break-word",
-                  color: "#e2e8f0",
-                  whiteSpace: "pre-wrap",
-                  background: msg.role === "user"
-                    ? "linear-gradient(135deg, #10b981 0%, #059669 100%)" // emerald for user
-                    : msg.isAlert 
-                      ? "rgba(239, 68, 68, 0.15)" // Crimson red for safety warning
-                      : msg.sender === "human"
-                        ? "rgba(59, 130, 246, 0.15)" // blue tint for human staff
-                        : "rgba(255, 255, 255, 0.04)", // gray for standard bot
-                  border: msg.role === "user" 
-                    ? "none" 
-                    : msg.isAlert 
-                      ? "1px solid rgba(239, 68, 68, 0.3)" 
-                      : msg.sender === "human"
-                        ? "1px solid rgba(59, 130, 246, 0.3)"
-                        : "1px solid var(--border-color)",
-                  boxShadow: msg.role === "user" ? "0 4px 10px rgba(16, 185, 129, 0.15)" : "none",
-                }}>
-                  {msg.content}
-                </div>
-
-                {/* Speaker Timestamp/Meta */}
-                <div style={{
-                  fontSize: "9px",
-                  color: "var(--text-muted)",
-                  marginTop: "4px",
-                  padding: "0 4px"
-                }}>
-                  {msg.role === "user" 
-                    ? "You" 
-                    : msg.isAlert 
-                      ? "Safety Alert" 
-                      : msg.sender === "human"
-                        ? "Staff receptionist"
-                        : "MediGuide Bot"}
-                </div>
-              </div>
-            ))}
-
-            {/* Dynamic Typing Indicator */}
-            {isTyping && (
-              <div style={{ display: "flex", gap: "4px", padding: "10px 14px", background: "rgba(255,255,255,0.02)", border: "1px solid var(--border-color)", borderRadius: "14px", width: "50px" }}>
-                {[1, 2, 3].map(dot => (
-                  <div key={dot} style={{
-                    width: "6px",
-                    height: "6px",
-                    borderRadius: "50%",
-                    backgroundColor: "var(--primary)",
-                    animation: "blink 1.2s infinite both",
-                    animationDelay: `${dot * 0.15}s`
-                  }} />
-                ))}
+                {/* Solid Chip: Escalate Handoff */}
+                <button
+                  onClick={() => handleChipClick("escalate")}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "20px",
+                    border: "none",
+                    background: "#7c3aed",
+                    color: "#fff",
+                    fontSize: "12px",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    transition: "all 0.2s"
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#6d28d9"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "#7c3aed"}
+                >
+                  I need to chat with an agent.
+                </button>
               </div>
             )}
-            <div ref={messagesEndRef} />
-          </div>
 
-          {/* Quick Suggestions Chips Panel */}
-          {messages.length < 5 && (
-            <div style={{
-              padding: "10px 16px",
-              background: "#0c0e14",
-              borderTop: "1px solid rgba(255,255,255,0.02)",
-              display: "flex",
-              gap: "8px",
-              overflowX: "auto",
-              whiteSpace: "nowrap"
-            }} className="no-scrollbar">
-              {quickPrompts.map((prompt, i) => (
-                <button
-                  key={i}
-                  onClick={() => handleSend(prompt.text)}
-                  style={{
-                    padding: "6px 12px",
-                    borderRadius: "16px",
-                    border: "1px solid var(--border-color)",
-                    background: "rgba(255,255,255,0.02)",
-                    color: "var(--text-sub)",
-                    fontSize: "11px",
-                    cursor: "pointer",
-                    transition: "var(--transition)"
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = "var(--primary)";
-                    e.currentTarget.style.color = "#fff";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = "var(--border-color)";
-                    e.currentTarget.style.color = "var(--text-sub)";
-                  }}
-                >
-                  {prompt.label}
-                </button>
-              ))}
-            </div>
-          )}
+            {/* Uploaded Prescription Preview Thumbnail inside input bar */}
+            {imagePreview && (
+              <div style={{
+                padding: "10px 16px",
+                background: "#fff",
+                borderTop: "1px solid #f3f4f6",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px"
+              }}>
+                <div style={{ position: "relative" }}>
+                  <img 
+                    src={imagePreview} 
+                    alt="prescription preview" 
+                    style={{
+                      width: "48px",
+                      height: "48px",
+                      borderRadius: "8px",
+                      objectFit: "cover",
+                      border: "1px solid #ddd"
+                    }}
+                  />
+                  <button
+                    onClick={handleRemoveImage}
+                    style={{
+                      position: "absolute",
+                      top: "-6px",
+                      right: "-6px",
+                      width: "16px",
+                      height: "16px",
+                      borderRadius: "50%",
+                      backgroundColor: "#ef4444",
+                      color: "#fff",
+                      border: "none",
+                      fontSize: "9px",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div>
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: "#1f2937" }}>Prescription Attached</div>
+                  <div style={{ fontSize: "9.5px", color: "#6b7280" }}>Scan will process immediately on send</div>
+                </div>
+              </div>
+            )}
 
-          {/* Emergency quick Call overlay */}
-          {emergencyAlert && (
-            <div style={{
-              padding: "10px 16px",
-              background: "#140e11",
-              borderTop: "1px solid rgba(239, 68, 68, 0.2)",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center"
-            }}>
-              <span style={{ fontSize: "11px", color: "#ff6b6b" }}>Need medical assistance immediately?</span>
-              <a 
-                href="tel:108"
+            {/* Bottom Send Input Bar Form */}
+            <form 
+              onSubmit={(e) => { e.preventDefault(); handleSend(); }}
+              style={{
+                padding: "12px 16px",
+                background: "#fff",
+                borderTop: "1px solid #f3f4f6",
+                display: "flex",
+                alignItems: "center",
+                gap: "10px"
+              }}
+            >
+              {/* Image Attachment Trigger */}
+              <button 
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
                 style={{
+                  border: "none",
+                  background: "transparent",
+                  color: "#7c3aed",
+                  cursor: "pointer",
+                  padding: "4px",
                   display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  backgroundColor: "#ef4444",
-                  color: "#fff",
-                  padding: "5px 12px",
-                  borderRadius: "14px",
-                  fontSize: "11px",
-                  fontWeight: 700,
-                  textDecoration: "none"
+                  alignItems: "center"
+                }}
+                title="Attach prescription receipt image"
+              >
+                <Paperclip size={20} />
+              </button>
+              
+              <input 
+                type="file"
+                ref={fileInputRef}
+                onChange={handleImageSelect}
+                accept="image/*"
+                style={{ display: "none" }}
+              />
+
+              {/* Text Input */}
+              <input 
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder="Send a message"
+                style={{
+                  flex: 1,
+                  border: "none",
+                  background: "transparent",
+                  fontSize: "13.5px",
+                  color: "#111827",
+                  padding: "8px 0"
+                }}
+                id="input-chatbot-text"
+              />
+
+              {/* Dictation Microphone */}
+              <button 
+                type="button"
+                onClick={toggleListening}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: isListening ? "#ef4444" : "#9ca3af",
+                  cursor: "pointer",
+                  padding: "4px",
+                  display: "flex",
+                  alignItems: "center"
                 }}
               >
-                <Phone size={11} /> Dial 108
-              </a>
-            </div>
-          )}
+                {isListening ? <MicOff size={16} /> : <Mic size={16} />}
+              </button>
 
-          {/* Form Input Footer */}
-          <form 
-            onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-            style={{
-              padding: "16px",
-              background: "#0c0e14",
-              borderTop: "1px solid var(--border-color)",
+              {/* Send Button */}
+              <button 
+                type="submit"
+                disabled={!inputValue.trim() && !selectedImage}
+                style={{
+                  border: "none",
+                  background: "transparent",
+                  color: (inputValue.trim() || selectedImage) ? "#7c3aed" : "#9ca3af", // Purple active send text
+                  fontWeight: 700,
+                  fontSize: "14px",
+                  cursor: (inputValue.trim() || selectedImage) ? "pointer" : "default",
+                  padding: "4px 8px"
+                }}
+                id="btn-chatbot-send"
+              >
+                Send
+              </button>
+            </form>
+
+            {/* Mobile Bottom Home Bar padding */}
+            <div style={{
+              height: "18px",
+              backgroundColor: "#fff",
               display: "flex",
-              alignItems: "center",
-              gap: "8px"
-            }}
-          >
-            {/* Speech Microphone Toggle */}
-            <button 
-              type="button"
-              onClick={toggleListening}
-              style={{
-                width: "36px",
-                height: "36px",
-                borderRadius: "50%",
-                border: "none",
-                background: isListening ? "rgba(239, 68, 68, 0.15)" : "rgba(255,255,255,0.03)",
-                color: isListening ? "#ef4444" : "var(--text-muted)",
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "var(--transition)"
-              }}
-              title="Dictate message"
-            >
-              {isListening ? <MicOff size={16} /> : <Mic size={16} />}
-            </button>
+              justifyContent: "center",
+              alignItems: "center"
+            }}>
+              {/* Home indicator bar */}
+              <div style={{
+                width: "120px",
+                height: "4px",
+                borderRadius: "2px",
+                backgroundColor: "#e5e7eb"
+              }} />
+            </div>
 
-            {/* Input Field */}
-            <input 
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              placeholder={
-                isListening 
-                  ? "Listening carefully..." 
-                  : session?.isEscalated 
-                    ? "Type to live clinician..."
-                    : "Ask MediGuide (fasting, MRI)..."
-              }
-              disabled={isListening}
-              style={{
-                flex: 1,
-                height: "38px",
-                borderRadius: "20px",
-                border: "1px solid var(--border-color)",
-                background: "rgba(255, 255, 255, 0.02)",
-                color: "#fff",
-                padding: "0 14px",
-                fontSize: "12.5px"
-              }}
-              id="input-chatbot-text"
-            />
-
-            {/* Send Submit Button */}
-            <button 
-              type="submit"
-              disabled={!inputValue.trim()}
-              style={{
-                width: "36px",
-                height: "36px",
-                borderRadius: "50%",
-                border: "none",
-                background: inputValue.trim() 
-                  ? "linear-gradient(135deg, #10b981 0%, #059669 100%)" 
-                  : "rgba(255, 255, 255, 0.03)",
-                color: inputValue.trim() ? "#fff" : "var(--text-muted)",
-                cursor: inputValue.trim() ? "pointer" : "default",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                transition: "var(--transition)"
-              }}
-              id="btn-chatbot-send"
-            >
-              <Send size={16} />
-            </button>
-          </form>
-
+          </div>
         </div>
       )}
 

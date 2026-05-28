@@ -501,6 +501,21 @@ export default function Dashboard({
                                 ? "none"
                                 : "1px solid rgba(16,185,129,0.2)"
                           }}>
+                            {msg.image && (
+                              <div style={{ marginBottom: "8px" }}>
+                                <img 
+                                  src={msg.image} 
+                                  alt="patient prescription upload" 
+                                  style={{
+                                    maxWidth: "100%",
+                                    maxHeight: "180px",
+                                    borderRadius: "8px",
+                                    border: "1px solid rgba(255,255,255,0.1)",
+                                    display: "block"
+                                  }}
+                                />
+                              </div>
+                            )}
                             {msg.content}
                           </div>
                           <span style={{ fontSize: "9px", color: "var(--text-muted)", marginTop: "4px" }}>
