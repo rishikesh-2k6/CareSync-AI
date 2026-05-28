@@ -186,8 +186,16 @@ export async function callLLM({
       return text;
     }
 
-    // --- OPENAI API INTEGRATION (Direct Browser Client Call) ---
-    if (provider === "openai") {
+    // --- GROQ & OPENAI API INTEGRATION (Direct Browser Client Call) ---
+    if (provider === "groq" || provider === "openai") {
+      const endpoint = provider === "groq"
+        ? "https://api.groq.com/openai/v1/chat/completions"
+        : "https://api.openai.com/v1/chat/completions";
+
+      const defaultModel = provider === "groq"
+        ? "llama-3.3-70b-versatile"
+        : "gpt-4o-mini";
+
       const messages = [
         {
           role: "system",
@@ -203,14 +211,14 @@ export async function callLLM({
         }
       ];
 
-      const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-          model: model || "gpt-4o-mini",
+          model: model || defaultModel,
           messages,
           max_tokens: 300,
           temperature: 0.3
@@ -219,7 +227,7 @@ export async function callLLM({
 
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error?.message || "OpenAI API call failed");
+        throw new Error(errorData.error?.message || `${provider.toUpperCase()} API call failed`);
       }
 
       const data = await response.json();

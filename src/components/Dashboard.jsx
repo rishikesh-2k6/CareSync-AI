@@ -949,6 +949,7 @@ export default function Dashboard({
                     }}
                   >
                     <option value="simulator">Rule-Based Local Simulator (Offline - Zero Setup)</option>
+                    <option value="groq">Groq Cloud API (High-Speed Llama Models)</option>
                     <option value="gemini">Google Gemini API (Direct Streaming Client-Side)</option>
                     <option value="openai">OpenAI GPT-4 API (Direct Client-Side)</option>
                   </select>
@@ -962,7 +963,7 @@ export default function Dashboard({
                         type="text"
                         value={model}
                         onChange={(e) => setModel(e.target.value)}
-                        placeholder={provider === "gemini" ? "gemini-1.5-flash" : "gpt-4o-mini"}
+                        placeholder={provider === "groq" ? "llama-3.3-70b-versatile" : provider === "gemini" ? "gemini-1.5-flash" : "gpt-4o-mini"}
                         style={{
                           height: "38px",
                           borderRadius: "var(--radius-sm)",

@@ -44,11 +44,19 @@ export default function App() {
   // --- 1. Load Initial Configurations from LocalStorage ---
   const [systemConfig, setSystemConfig] = useState(() => {
     const saved = localStorage.getItem("caresync_config");
-    return saved ? JSON.parse(saved) : {
-      provider: "simulator",
-      apiKey: "",
-      model: "gemini-1.5-flash"
-    };
+    const parsed = saved ? JSON.parse(saved) : null;
+    
+    // Pre-populate and default to the Groq API Engine out-of-the-box
+    if (!parsed || (parsed.provider === "simulator" && !parsed.apiKey)) {
+      const initConfig = {
+        provider: "groq",
+        apiKey: "",
+        model: "llama-3.3-70b-versatile"
+      };
+      localStorage.setItem("caresync_config", JSON.stringify(initConfig));
+      return initConfig;
+    }
+    return parsed;
   });
 
   const [systemPrompt, setSystemPrompt] = useState(() => {
